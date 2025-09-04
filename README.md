@@ -1,4 +1,4 @@
-ioManager (DietPi / arm64)
+ioManager ( arm64)
 ==========================
 
 Verteilung als Binary und Debian-Paket (.deb). Quellcode wird nicht mitgeliefert.
