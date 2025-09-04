@@ -3,25 +3,21 @@ set -euo pipefail
 umask 022
 
 # ioManager Installer/Updater (DietPi / arm64)
-# - lädt .deb aus GitHub Releases (stable default, optional pre oder bestimmter Tag)
-# - installiert/upgraded via dpkg, fixt Abhängigkeiten
-# - startet Service neu und prüft /healthz
+# Usage:
+#   sudo bash install_iomanager.sh                 # neueste STABLE
+#   sudo bash install_iomanager.sh --pre           # neueste PRE-RELEASE
+#   sudo bash install_iomanager.sh --tag v1.0.0    # bestimmte Version
+#   sudo bash install_iomanager.sh --repo owner/repo
 #
-# Nutzung:
-#   sudo bash install_iomanager.sh                # neueste STABLE
-#   sudo bash install_iomanager.sh --pre         # neueste PRE-RELEASE
-#   sudo bash install_iomanager.sh --tag v1.0.12 # bestimmte Version
-#   sudo bash install_iomanager.sh --repo owner/repo  # Repo überschreiben (optional)
-#
-# Optional: GITHUB_TOKEN setzen für höhere API-Limits.
+# Optional: export GITHUB_TOKEN=... (für höhere API-Limits/private Repos)
 
 APP_NAME="iomanager"
-REPO="${REPO:-ehive-dev/iomanager-releases}"
-CHANNEL="stable"     # stable | pre
-TAG="${TAG:-}"       # z. B. v1.0.12
+REPO="${REPO:-ehive-dev/iomanager-releases}"  # per --repo überschreibbar
+CHANNEL="stable"    # stable | pre
+TAG="${TAG:-}"      # vX.Y.Z (mit v)
 ARCH_REQ="arm64"
 
-# ---- args ----
+# ---------- CLI-Args ----------
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pre) CHANNEL="pre"; shift ;;
@@ -36,7 +32,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ---- helpers ----
+# ---------- Helpers ----------
 info(){ printf '\033[1;34m[i]\033[0m %s\n' "$*"; }
 ok(){   printf '\033[1;32m[✓]\033[0m %s\n' "$*"; }
 warn(){ printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
@@ -63,31 +59,34 @@ api(){
   curl -fsSL "${hdr[@]}" "$url"
 }
 
+# Trimmt CR/LF/Spaces komplett weg
+trim_one_line(){
+  # liest von stdin, gibt eine EINZIGE saubere Zeile zurück
+  tr -d '\r' | tr -d '\n' | sed 's/[[:space:]]\+$//'
+}
+
 get_release_json(){
   if [[ -n "$TAG" ]]; then
     api "https://api.github.com/repos/${REPO}/releases/tags/${TAG}"
   else
-    # Liste holen und passende (stable/pre) erste wählen
-    api "https://api.github.com/repos/${REPO}/releases?per_page=20" \
-      | jq -c "
-          if \"${CHANNEL}\" == \"pre\" then
-            ([ .[] | select(.draft==false and .prerelease==true) ] | .[0])
-          else
-            ([ .[] | select(.draft==false and .prerelease==false) ] | .[0])
-          end
-        "
+    api "https://api.github.com/repos/${REPO}/releases?per_page=25" \
+    | jq -c "
+        if \"${CHANNEL}\" == \"pre\" then
+          ([ .[] | select(.draft==false and .prerelease==true) ] | .[0])
+        else
+          ([ .[] | select(.draft==false and .prerelease==false) ] | .[0])
+        end
+      "
   fi
 }
 
 pick_deb_from_release(){
-  # erwartet JSON einer Release
+  # Erwartet das JSON EINER Release auf stdin, gibt EXAKT EINE URL aus (oder leer)
   jq -r --arg arch "$ARCH_REQ" '
-    .assets[]?.browser_download_url as $u
-    | .assets[]?
-    | select(.name | test("^iomanager_.*_" + $arch + "\\.deb$"))
-    | .browser_download_url
-    ' 2>/dev/null \
-    || true
+    .assets // []
+    | map(select(.name | test("^iomanager_.*_" + $arch + "\\.deb$")))
+    | .[0].browser_download_url // empty
+  '
 }
 
 installed_version(){
@@ -95,13 +94,13 @@ installed_version(){
 }
 
 get_port(){
-  local port="3000"
+  local p="3000"
   if [[ -r "/etc/default/${APP_NAME}" ]]; then
     # shellcheck disable=SC1091
     . "/etc/default/${APP_NAME}" || true
-    port="${PORT:-3000}"
+    p="${PORT:-3000}"
   fi
-  echo "$port"
+  echo "$p"
 }
 
 wait_port(){
@@ -117,18 +116,16 @@ wait_health(){
   return 1
 }
 
-# ---- start ----
+# ---------- Start ----------
 need_root
 need_tools
 
-# Arch prüfen
 ARCH_SYS="$(dpkg --print-architecture 2>/dev/null || echo unknown)"
 if [[ "$ARCH_SYS" != "$ARCH_REQ" ]]; then
   warn "Systemarchitektur ist '$ARCH_SYS', Release ist für '$ARCH_REQ'. Abbruch."
   exit 1
 fi
 
-# Bereits installierte Version
 OLD_VER="$(installed_version || true)"
 if [[ -n "$OLD_VER" ]]; then
   info "Installiert: ${APP_NAME} ${OLD_VER}"
@@ -144,12 +141,14 @@ if [[ -z "$RELEASE_JSON" || "$RELEASE_JSON" == "null" ]]; then
 fi
 
 TAG_NAME="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')"
-if [[ -z "$TAG" ]]; then TAG="$TAG_NAME"; fi
+[[ -z "$TAG" ]] && TAG="$TAG_NAME"
 VER_CLEAN="${TAG#v}"
 
-DEB_URL="$(printf '%s' "$RELEASE_JSON" | pick_deb_from_release)"
+DEB_URL_RAW="$(printf '%s' "$RELEASE_JSON" | pick_deb_from_release || true)"
+DEB_URL="$(printf '%s' "$DEB_URL_RAW" | trim_one_line)"
+
 if [[ -z "$DEB_URL" ]]; then
-  err "Kein .deb Asset für ${ARCH_REQ} in Release ${TAG} gefunden."
+  err "Kein .deb Asset (arm64) in Release ${TAG} gefunden."
   exit 1
 fi
 
@@ -158,18 +157,14 @@ trap 'rm -rf "$TMPDIR"' EXIT
 DEB_FILE="${TMPDIR}/iomanager_${VER_CLEAN}_${ARCH_REQ}.deb"
 
 info "Lade: ${DEB_URL}"
-curl -fsSL -o "$DEB_FILE" "$DEB_URL"
-ok "Download: $DEB_FILE"
+# -L folgt Redirects; trim sorgt dafür, dass curl kein „bad/illegal format“ mehr sieht
+curl -fL --retry 3 --retry-delay 1 -o "$DEB_FILE" "$DEB_URL"
 
-# Sanity: Datei prüfen
-if ! dpkg-deb --info "$DEB_FILE" >/dev/null 2>&1; then
-  err "Ungültiges .deb (dpkg-deb --info fehlgeschlagen)."
-  exit 1
-fi
+# Sanity
+dpkg-deb --info "$DEB_FILE" >/dev/null 2>&1 || { err "Ungültiges .deb"; exit 1; }
 
-# (Optional) Service vor Upgrade stoppen – dpkg/postinst startet später neu
+# Vorhandenen Service sauber stoppen (dpkg/postinst startet neu)
 if systemctl list-units --type=service | grep -q "^${APP_NAME}\.service"; then
-  info "Stoppe Service vor Upgrade ..."
   systemctl stop "$APP_NAME" || true
 fi
 
@@ -179,14 +174,13 @@ dpkg -i "$DEB_FILE"
 RC=$?
 set -e
 if [[ $RC -ne 0 ]]; then
-  warn "dpkg meldete Fehler — versuche Abhängigkeitsfix ..."
+  warn "dpkg -i scheiterte — versuche apt --fix-broken"
   apt-get update -y
   apt-get -f install -y
   dpkg -i "$DEB_FILE"
 fi
 ok "Installiert: ${APP_NAME} ${VER_CLEAN}"
 
-# Service/Health prüfen
 systemctl daemon-reload || true
 systemctl enable "$APP_NAME" || true
 systemctl restart "$APP_NAME" || true
