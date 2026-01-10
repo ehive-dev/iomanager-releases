@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
+# install_iomanager.sh
+# Main functions:
+# - api/get_release_json/pick_deb_from_release: Select correct GitHub release asset (.deb arm64) and download URL
+# - need_root/need_tools: Ensure prerequisites (root, curl, jq)
+# - installed_version/get_port/wait_port/wait_health: Post-install checks and health verification
+# - cgroup_escape: If started from within iomanager.service, re-run inside a separate systemd scope so stopping iomanager won't kill the updater
+
 set -euo pipefail
 umask 022
-
-# ioManager Installer/Updater (DietPi / arm64)
-# Usage:
-#   sudo bash install_iomanager.sh                 # neueste STABLE
-#   sudo bash install_iomanager.sh --pre           # neueste PRE-RELEASE
-#   sudo bash install_iomanager.sh --tag v1.0.0    # bestimmte Version
-#   sudo bash install_iomanager.sh --repo owner/repo
-#
-# Optional: export GITHUB_TOKEN=... (für höhere API-Limits/private Repos)
 
 APP_NAME="iomanager"
 REPO="${REPO:-ehive-dev/iomanager-releases}"  # per --repo überschreibbar
@@ -44,10 +42,42 @@ need_root(){
     exit 1
   fi
 }
+
 need_tools(){
   command -v curl >/dev/null || { apt-get update -y; apt-get install -y curl; }
   command -v jq   >/dev/null || { apt-get update -y; apt-get install -y jq; }
   command -v ss   >/dev/null || true
+  command -v systemd-run >/dev/null || true
+}
+
+# Escape, falls aus iomanager.service gestartet (sonst killt stop/restart die Update-Unit inkl. Updater-Prozess)
+cgroup_escape(){
+  # Nur einmal escapen
+  if [[ -n "${IOMANAGER_UPD_ESCAPED:-}" ]]; then
+    return 0
+  fi
+  # Wenn wir in der iomanager.service-CGroup laufen -> in eigenen scope umziehen
+  if grep -q 'iomanager\.service' /proc/$$/cgroup 2>/dev/null; then
+    if command -v systemd-run >/dev/null 2>&1; then
+      export IOMANAGER_UPD_ESCAPED=1
+      local unit="iomanager-update-$$"
+      info "Updater läuft innerhalb iomanager.service → starte in eigener systemd-scope (${unit}) ..."
+      # --wait + --pipe: synchron + Ausgabe durchreichen (so wirkt es wie normaler Aufruf)
+      exec systemd-run --unit="$unit" --scope --wait --pipe \
+        /usr/bin/env -i \
+          PATH="$PATH" \
+          HOME="${HOME:-/root}" \
+          TERM="${TERM:-dumb}" \
+          LANG="${LANG:-C}" \
+          GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+          REPO="$REPO" \
+          TAG="$TAG" \
+          IOMANAGER_UPD_ESCAPED=1 \
+          bash "$0" "${@:-}"
+    else
+      warn "systemd-run nicht gefunden; Update läuft evtl. im iomanager.service-Kontext weiter."
+    fi
+  fi
 }
 
 api(){
@@ -59,9 +89,7 @@ api(){
   curl -fsSL "${hdr[@]}" "$url"
 }
 
-# Trimmt CR/LF/Spaces komplett weg
 trim_one_line(){
-  # liest von stdin, gibt eine EINZIGE saubere Zeile zurück
   tr -d '\r' | tr -d '\n' | sed 's/[[:space:]]\+$//'
 }
 
@@ -81,7 +109,6 @@ get_release_json(){
 }
 
 pick_deb_from_release(){
-  # Erwartet das JSON EINER Release auf stdin, gibt EXAKT EINE URL aus (oder leer)
   jq -r --arg arch "$ARCH_REQ" '
     .assets // []
     | map(select(.name | test("^iomanager_.*_" + $arch + "\\.deb$")))
@@ -106,19 +133,26 @@ get_port(){
 wait_port(){
   local port="$1"
   command -v ss >/dev/null 2>&1 || return 0
-  for i in {1..60}; do ss -ltn 2>/dev/null | grep -q ":${port} " && return 0; sleep 0.5; done
+  for _ in {1..60}; do
+    ss -ltn 2>/dev/null | grep -q ":${port} " && return 0
+    sleep 0.5
+  done
   return 1
 }
 
 wait_health(){
   local url="$1"
-  for i in {1..30}; do curl -fsS "$url" >/dev/null && return 0; sleep 1; done
+  for _ in {1..30}; do
+    curl -fsS "$url" >/dev/null && return 0
+    sleep 1
+  done
   return 1
 }
 
 # ---------- Start ----------
 need_root
 need_tools
+cgroup_escape "$@"
 
 ARCH_SYS="$(dpkg --print-architecture 2>/dev/null || echo unknown)"
 if [[ "$ARCH_SYS" != "$ARCH_REQ" ]]; then
@@ -157,16 +191,12 @@ trap 'rm -rf "$TMPDIR"' EXIT
 DEB_FILE="${TMPDIR}/iomanager_${VER_CLEAN}_${ARCH_REQ}.deb"
 
 info "Lade: ${DEB_URL}"
-# -L folgt Redirects; trim sorgt dafür, dass curl kein „bad/illegal format“ mehr sieht
 curl -fL --retry 3 --retry-delay 1 -o "$DEB_FILE" "$DEB_URL"
 
-# Sanity
 dpkg-deb --info "$DEB_FILE" >/dev/null 2>&1 || { err "Ungültiges .deb"; exit 1; }
 
-# Vorhandenen Service sauber stoppen (dpkg/postinst startet neu)
-if systemctl list-units --type=service | grep -q "^${APP_NAME}\.service"; then
-  systemctl stop "$APP_NAME" || true
-fi
+# Service sauber stoppen (wichtig: list-units zeigt ggf. inactive nicht an)
+systemctl stop "${APP_NAME}.service" 2>/dev/null || true
 
 info "Installiere Paket ..."
 set +e
@@ -183,10 +213,11 @@ ok "Installiert: ${APP_NAME} ${VER_CLEAN}"
 
 systemctl daemon-reload || true
 systemctl enable "$APP_NAME" || true
-systemctl restart "$APP_NAME" || true
+systemctl restart "$APP_NAME"
 
 PORT="$(get_port)"
 URL="http://127.0.0.1:${PORT}/healthz"
+
 info "Warte auf Port :${PORT} ..."
 wait_port "$PORT" || { err "Port ${PORT} lauscht nicht."; journalctl -u "$APP_NAME" -n 200 --no-pager -o cat || true; exit 1; }
 
