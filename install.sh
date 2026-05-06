@@ -82,6 +82,10 @@ cgroup_escape(){
 
 api(){
   local url="$1"
+  if command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then
+    gh api "${url#https://api.github.com/}"
+    return
+  fi
   local hdr=(-H "Accept: application/vnd.github+json")
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     hdr+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
