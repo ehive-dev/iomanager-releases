@@ -1,6 +1,6 @@
 # ioManager Releases
 
-Dieses Repository enthaelt oeffentliche Release-Pakete fuer ioManager.
+Dieses Repository enthält öffentliche Release-Pakete für ioManager.
 
 ## Schnellstart
 
@@ -37,7 +37,7 @@ curl http://127.0.0.1:3000/healthz
 
 ## Lizenz
 
-Die Nutzung ist fuer private und nicht-kommerzielle Zwecke erlaubt. Kommerzielle Nutzung benoetigt eine vorherige schriftliche Zustimmung von ehive. Siehe `LICENSE.txt` und `THIRD_PARTY_NOTICES.txt`.
+Die Nutzung ist für private und nicht-kommerzielle Zwecke erlaubt. Kommerzielle Nutzung benötigt eine vorherige schriftliche Zustimmung von ehive. Siehe `LICENSE.txt` und `THIRD_PARTY_NOTICES.txt`.
 
 ## Bilder
 
