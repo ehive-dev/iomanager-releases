@@ -1,0 +1,27 @@
+{
+  "id": "ioManager",
+  "name": "ioManager",
+  "aliases": [
+    "io manager",
+    "iomanger",
+    "iomanager"
+  ],
+  "version": "1.1.2",
+  "summary": "DI1 und DI2 getrennt beobachten und über HTTP abfragen.",
+  "description": "Zeigt Zustände und Verläufe beider Digitaleingänge, bietet CSV-Exporte und eine rückwärtskompatible HTTP-API. Übernimmt beim Laden den gespeicherten SmartHub-Skin (hell/dunkel).",
+  "download": {
+    "label": "Download",
+    "url": "https://github.com/ehive-dev/iomanager-releases/releases/latest"
+  },
+  "uninstall": {
+    "label": "Deinstallieren",
+    "kind": "apt",
+    "pkg": "iomanager"
+  },
+  "links": [
+    {
+      "label": "Release-Repo",
+      "url": "https://github.com/ehive-dev/iomanager-releases"
+    }
+  ]
+}

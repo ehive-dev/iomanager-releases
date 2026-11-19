@@ -25,3 +25,12 @@ Soweit erforderlich, werden Lizenztexte und Hinweise zu Komponenten Dritter im R
 Falls eine Komponente Dritter in dieser repositoryweiten Hinweisdatei nicht aufgeführt ist, gilt ihre ursprüngliche Lizenz weiterhin.
 
 Projektverantwortliche sollten die konkrete Liste der enthaltenen Komponenten Dritter und deren Lizenzen hier ergänzen oder eine generierte Hinweisdatei mit jedem Release-Paket ausliefern.
+
+
+ioManager 1.1.2 distribution details
+
+The ARM64 Debian package includes Node.js 24.22.3. Its complete license and bundled third-party notices are installed at /usr/share/doc/iomanager/Node-LICENSE. Node.js remains subject to its upstream licenses.
+
+The bundled browser libraries include Chart.js 4.4.0, @kurkle/color, chartjs-adapter-date-fns 3.0.0, and date-fns 2.30.0. Their license files are installed under /usr/share/doc/iomanager/vendor/.
+
+These upstream licenses are independent of the ehive license.
